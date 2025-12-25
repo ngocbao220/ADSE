@@ -1,0 +1,9 @@
+paper/
+diffusion-vs-ar/output
+diffusion-vs-ar/data
+diffusion-vs-ar/cache
+__pycache__/
+*.pyc
+*.pkl
+*.ckpt
+*.pt
