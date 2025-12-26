@@ -1,116 +1,106 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
-import matplotlib.pyplot as plt
+from torch.utils.data import TensorDataset, DataLoader
+import argparse
+import os
 
-# ==========================================
-# 1. CẤU HÌNH
-# ==========================================
-DATA_FILE = "mind_dataset_train.pt"
-OUTPUT_MODEL = "mind_model.pth"
-INPUT_DIM = 384 
-HIDDEN_DIM = 256
-BATCH_SIZE = 64
-EPOCHS = 10
-LEARNING_RATE = 1e-3
-
-# ==========================================
-# 2. ĐỊNH NGHĨA MẠNG NỘI QUAN (MIND)
-# ==========================================
-class IntrospectionHead(nn.Module):
-    def __init__(self, input_dim, hidden_dim):
+class IntrospectionNet(nn.Module):
+    def __init__(self, input_dim):
         super().__init__()
+        # Mạng MLP đơn giản: Input -> 256 -> 64 -> 1 (Sigmoid)
         self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(input_dim, 256),
             nn.ReLU(),
+            nn.BatchNorm1d(256), # Giúp train ổn định hơn
             nn.Dropout(0.2),
-            nn.Linear(hidden_dim, 1),
-            nn.Sigmoid() # Output: 0.0 -> 1.0 (Xác suất tự tin)
+            nn.Linear(256, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
         )
     
     def forward(self, x):
         return self.net(x)
 
-# ==========================================
-# 3. DATASET
-# ==========================================
-class MindDataset(Dataset):
-    def __init__(self, data_path):
-        data = torch.load(data_path)
-        # Chuyển về float32 để train
-        self.x = data["x"].float() 
-        self.y = data["y"].float().unsqueeze(1) # [N, 1]
-        
-        print(f"Loaded Data: {self.x.shape}")
-        
-    def __len__(self):
-        return len(self.x)
-    
-    def __getitem__(self, idx):
-        return self.x[idx], self.y[idx]
-
-# ==========================================
-# 4. TRAINING LOOP
-# ==========================================
 def train():
-    # 1. Prepare Data
-    if not torch.cuda.is_available():
-        print("WARNING: Đang chạy trên CPU, sẽ hơi chậm!")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_path", default="introspection_data.pt")
+    parser.add_argument("--save_path", default="introspection_net.pth")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=8192) # Batch to vì H200 mạnh
+    args = parser.parse_args()
+
+    if not os.path.exists(args.data_path):
+        print(f"Error: Không tìm thấy file {args.data_path}. Hãy chạy collect_data.py trước!")
+        return
+
+    # 1. LOAD DATA
+    print(f"Loading data from {args.data_path}...")
+    data = torch.load(args.data_path)
+    X = data['x'].float() # Convert lại sang float32 để train
+    Y = data['y'].float().unsqueeze(1)
     
-    full_dataset = MindDataset(DATA_FILE)
+    # Tự động lấy hidden dim từ file save
+    input_dim = data.get("hidden_dim", X.shape[1])
+    print(f"Input Dimension: {input_dim}")
+    print(f"Total Samples: {len(X)}")
+
+    # Split Train/Val (90/10)
+    split = int(len(X) * 0.9)
+    # Shuffle nhẹ
+    perm = torch.randperm(len(X))
+    train_X, val_X = X[perm[:split]], X[perm[split:]]
+    train_Y, val_Y = Y[perm[:split]], Y[perm[split:]]
+
+    # DataLoader
+    train_loader = DataLoader(TensorDataset(train_X, train_Y), batch_size=args.batch_size, shuffle=True)
     
-    # Split Train/Val (80/20)
-    train_size = int(0.8 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_data, val_data = random_split(full_dataset, [train_size, val_size])
-    
-    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE)
-    
-    # 2. Init Model
-    model = IntrospectionHead(INPUT_DIM, HIDDEN_DIM).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    criterion = nn.BCELoss() # Binary Cross Entropy (Đúng/Sai)
-    
-    # 3. Train
-    print(f"\nStart Training MIND on {device}...")
-    
-    for epoch in range(EPOCHS):
+    # 2. INIT MODEL
+    model = IntrospectionNet(input_dim).cuda()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    criterion = nn.BCELoss() # Binary Cross Entropy
+
+    # 3. TRAINING LOOP
+    print("\nStart Training Introspection Network...")
+    print(f"{'Epoch':^5} | {'Train Loss':^12} | {'Val Loss':^10} | {'Val Acc':^10}")
+    print("-" * 45)
+
+    for epoch in range(args.epochs):
         model.train()
         total_loss = 0
         
-        for x_batch, y_batch in train_loader:
-            x_batch, y_batch = x_batch.to(device), y_batch.to(device)
+        for bx, by in train_loader:
+            bx, by = bx.cuda(), by.cuda()
             
             optimizer.zero_grad()
-            preds = model(x_batch)
-            loss = criterion(preds, y_batch)
+            pred = model(bx)
+            loss = criterion(pred, by)
             loss.backward()
             optimizer.step()
             
             total_loss += loss.item()
-            
+        
         # Validation
         model.eval()
-        correct = 0
-        total = 0
         with torch.no_grad():
-            for x_val, y_val in val_loader:
-                x_val, y_val = x_val.to(device), y_val.to(device)
-                preds = model(x_val)
-                predicted_labels = (preds > 0.5).float()
-                correct += (predicted_labels == y_val).sum().item()
-                total += y_val.size(0)
+            val_pred = model(val_X.cuda())
+            v_loss = criterion(val_pred, val_Y.cuda()).item()
+            # Accuracy: Nếu > 0.5 coi là class 1
+            predicted_class = (val_pred > 0.5).float()
+            acc = (predicted_class == val_Y.cuda()).float().mean().item()
         
-        acc = correct / total
-        print(f"Epoch {epoch+1}/{EPOCHS} | Loss: {total_loss/len(train_loader):.4f} | Val Acc: {acc:.2%}")
+        avg_train_loss = total_loss / len(train_loader)
+        print(f"{epoch+1:^5} | {avg_train_loss:^12.4f} | {v_loss:^10.4f} | {acc:^10.2%}")
 
-    # 4. Save
-    torch.save(model.state_dict(), OUTPUT_MODEL)
-    print(f"\n>>> Đã lưu model tại: {OUTPUT_MODEL}")
-    print("Mạng MIND đã sẵn sàng để tích hợp vào Inference!")
+    # 4. SAVE
+    # Lưu cả weight và config input_dim để lúc load inference không bị nhầm
+    save_dict = {
+        "state_dict": model.state_dict(),
+        "input_dim": input_dim
+    }
+    torch.save(save_dict, args.save_path)
+    print(f"\nTraining Complete! Model saved to {args.save_path}")
 
 if __name__ == "__main__":
     train()

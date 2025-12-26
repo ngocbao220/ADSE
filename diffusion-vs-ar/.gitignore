@@ -1,0 +1,24 @@
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data / artifacts
+*.zip
+*.pth
+*.pt
+*.csv
+*.gif
+*.png
+
+# Temp / generated
+temp_frames/
+temp_frames_compare/
+output/
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Conda / installer
+Miniconda3-*.sh
