@@ -323,11 +323,11 @@ def test_from_csv(tester, csv_path, max_samples=None, save_results=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", required=True, help="Path to model checkpoint")
+    parser.add_argument("--model_path", default="output/sudoku/mdm-5m-sudoku", help="Path to model checkpoint")
     parser.add_argument("--model_config", default="model_config_tiny", help="Model config")
-    parser.add_argument("--csv_file", default=None, help="CSV file with quizzes and solutions")
+    parser.add_argument("--csv_file", default="data/sudoku_test.csv", help="CSV file with quizzes and solutions")
     parser.add_argument("--txt_file", default=None, help="Text file with one sudoku per line")
-    parser.add_argument("--max_samples", type=int, default=None, help="Max samples to test")
+    parser.add_argument("--max_samples", type=int, default=1000, help="Max samples to test")
     parser.add_argument("--save_results", default=None, help="Path to save results CSV")
     parser.add_argument("--diffusion_steps", type=int, default=20, help="Number of diffusion steps")
     args = parser.parse_args()

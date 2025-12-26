@@ -3,8 +3,8 @@ export WANDB_DISABLED=true
 exp=output/sudoku/mdm-alpha0.25-gamma1-bs1024-lr1e-3-ep300-T20-`date "+%Y%m%d-%H%M%S"`
 mkdir -p $exp
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
-accelerate launch --multi_gpu --num_machines 1 --mixed_precision fp16 --num_processes 8 --main_process_port 20099 \
+CUDA_VISIBLE_DEVICES=0 \
+accelerate launch --multi_gpu --num_machines 1 --mixed_precision fp16 --main_process_port 20098 \
 src/train_bash.py \
     --stage mdm --overwrite_output_dir \
     --cache_dir ./cache \
@@ -45,7 +45,7 @@ for dataset in sudoku_test
 do
 topk_decoding=True
 mkdir $exp/$dataset
-CUDA_VISIBLE_DEVICES=1  \
+CUDA_VISIBLE_DEVICES=0  \
 python3 -u src/train_bash.py \
     --stage mdm --overwrite_output_dir \
     --cache_dir ./cache \

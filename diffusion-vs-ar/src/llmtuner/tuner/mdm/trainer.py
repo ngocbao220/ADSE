@@ -162,328 +162,66 @@ class CustomDiffusionTrainer(Trainer):
         loss = (loss * weight.reshape(-1)).sum() / loss_mask.sum()   # avg token loss
         return loss
 
-    # def generate_samples(self, inputs):
-    #     """
-    #     ADAPTIVE INFERENCE (With Verbose Logging): 
-    #     Tự động dừng khi đã điền xong, có in log từng bước để theo dõi.
-    #     """
-    #     self.model.cuda()
-    #     self.model.eval()
-        
-    #     # Biến này để kiểm tra xem có phải đang train hay không. 
-    #     # Nếu đang chạy eval/predict thì verbose = True -> In ra log
-    #     verbose = not self.is_in_train 
-        
-    #     # --- CẤU HÌNH ADAPTIVE ---
-    #     CONFIDENCE_THRESHOLD = 0.90 
-    #     # -------------------------
-
-    #     x = inputs['input_ids'].cuda()
-    #     src_mask = inputs['src_mask'].bool().cuda()
-    #     attention_mask = torch.ones_like(x) 
-    #     batch_size = x.size(0)
-
-    #     maskable_mask = ~src_mask 
-    #     steps_taken = 0
-
-    #     # Vòng lặp ngược từ T-1 về 0
-    #     for t in range(self.diff_args.diffusion_steps-1, -1, -1):
-    #         steps_taken += 1
-            
-    #         with torch.no_grad():
-    #             # 1. Khởi tạo nhiễu (Bước đầu tiên)
-    #             if t == self.diff_args.diffusion_steps-1:
-    #                 xt = x.masked_fill(maskable_mask, self.tokenizer.mask_token_id)
-
-    #             # --- [LOGGING INPUT] ---
-    #             # In ra trạng thái hiện tại của bàn cờ TRƯỚC khi đưa vào model
-    #             if verbose:
-    #                 # decode danh sách ID thành chuỗi số để dễ nhìn
-    #                 print(f"t={t+1}(in):", self.tokenizer.decode(xt.tolist()[0]))
-
-    #             # 2. Forward Model
-    #             t_tensor = torch.full((batch_size, ), t, device=x.device)
-    #             logits = self.model(xt, t_tensor, attention_mask=attention_mask)
-                
-    #             # Shift Logits
-    #             logits = torch.cat([logits[:,0:1], logits[:,:-1]], dim=1)
-
-    #             # 3. Tính toán
-    #             scores = torch.log_softmax(logits, dim=-1)
-    #             if hasattr(self.tokenizer, "vocab_size"):
-    #                 scores[:,:,self.tokenizer.vocab_size:] = -1000
-
-    #             x0_scores, x0_preds = scores.max(-1)
-    #             probs = torch.exp(x0_scores) 
-
-    #             # Cập nhật giá trị dự đoán (x0)
-    #             x0 = xt.masked_scatter(maskable_mask, x0_preds[maskable_mask])
-
-    #             # --- [LOGGING OUTPUT] ---
-    #             # In ra dự đoán của model (model nghĩ bàn cờ nên trông như thế nào)
-    #             if verbose:
-    #                 print(f"t={t+1}(out):", self.tokenizer.decode(x0.tolist()[0]))
-
-    #             # 4. --- LOGIC ADAPTIVE ---
-    #             high_conf_mask = (probs > CONFIDENCE_THRESHOLD) & maskable_mask
-                
-    #             # Điền cứng (Unmask) các số tự tin
-    #             if high_conf_mask.sum() > 0:
-    #                 xt[high_conf_mask] = x0_preds[high_conf_mask]
-    #                 maskable_mask[high_conf_mask] = False 
-                
-    #             # Early Exit
-    #             if maskable_mask.sum() == 0:
-    #                 if verbose:
-    #                     print(f"--> Adaptive Solved at Step {steps_taken}/{self.diff_args.diffusion_steps}. Exiting...")
-    #                 break 
-
-    #     return xt
-
-    # def generate_samples(self, inputs):
-    #     """
-    #     HYBRID ADAPTIVE: Sức mạnh của TopK gốc + Tốc độ của Adaptive
-    #     """
-    #     self.model.cuda()
-    #     self.model.eval()
-    #     verbose = not self.is_in_train
-        
-    #     x = inputs['input_ids'].cuda()
-    #     src_mask = inputs['src_mask'].bool().cuda()
-    #     attention_mask = torch.ones_like(x) 
-    #     batch_size = x.size(0)
-
-    #     # Mask ban đầu (những chỗ cần điền)
-    #     init_maskable_mask = maskable_mask = ~src_mask
-        
-    #     steps_taken = 0
-
-    #     for t in range(self.diff_args.diffusion_steps-1, -1, -1):
-    #         steps_taken += 1
-            
-    #         with torch.no_grad():
-    #             # 1. Khởi tạo nhiễu
-    #             if t == self.diff_args.diffusion_steps-1:
-    #                 xt = x.masked_fill(maskable_mask, self.tokenizer.mask_token_id)
-                
-    #             # 2. Forward
-    #             t_tensor = torch.full((batch_size, ), t, device=x.device)
-    #             logits = self.model(xt, t_tensor, attention_mask=attention_mask)
-    #             logits = torch.cat([logits[:,0:1], logits[:,:-1]], dim=1) # Logit Shift
-                
-    #             # 3. Tính Scores
-    #             scores = torch.log_softmax(logits, dim=-1)
-    #             if hasattr(self.tokenizer, "vocab_size"):
-    #                 scores[:,:,self.tokenizer.vocab_size:] = -1000
-                
-    #             x0_scores, x0_preds = scores.max(-1)
-                
-    #             # Tạo bản dự đoán x0 tạm thời
-    #             x0_preds = xt.masked_scatter(maskable_mask, x0_preds[maskable_mask]) 
-                
-    #             # 4. --- SỨC MẠNH CỦA BÀI BÁO GỐC (TopK Decoding) ---
-    #             # Gọi hàm có sẵn của tác giả để quyết định điền ô nào
-    #             if t > 0:
-    #                 if self.diff_args.topk_decoding:
-    #                     # Hàm này sẽ trả về xt mới với một số ô được unmask theo chiến thuật thông minh
-    #                     xt_new = topk_decoding(
-    #                         x0_preds, x0_scores, self.diff_args.decoding_strategy,
-    #                         maskable_mask, t, self.diff_args.diffusion_steps,
-    #                         self.tokenizer.mask_token_id
-    #                     )
-                        
-    #                     # Cập nhật lại maskable_mask (những ô nào chưa điền thì giữ True)
-    #                     # Logic: Ô nào vẫn là mask_token thì tức là chưa điền
-    #                     current_masks = (xt_new == self.tokenizer.mask_token_id)
-    #                     maskable_mask = current_masks & init_maskable_mask
-                        
-    #                     xt = xt_new
-    #                 else:
-    #                     # Fallback (Random)
-    #                     unmask_prob = 1 / (t+1)
-    #                     mask_to_unmask = torch.rand(xt.shape, device=xt.device) < unmask_prob
-    #                     mask_to_unmask = mask_to_unmask & maskable_mask
-    #                     xt[mask_to_unmask] = x0_preds[mask_to_unmask]
-    #                     maskable_mask[mask_to_unmask] = False
-    #             else:
-    #                 xt = x0_preds # Bước cuối thì lấy luôn kết quả
-
-    #             # 5. --- KẾT HỢP ADAPTIVE (EARLY EXIT) ---
-    #             # Kiểm tra: Nếu TopK Decoding đã điền hết sạch ô trống -> Dừng luôn
-    #             if maskable_mask.sum() == 0:
-    #                 if verbose:
-    #                     print(f"--> Hybrid Adaptive Solved at Step {steps_taken}/{self.diff_args.diffusion_steps}")
-    #                 break
-        
-    #     return xt
-
     def generate_samples(self, inputs):
         """
-        MIND-MGDM HYBRID:
-        - Sử dụng mô hình MIND đã train để quyết định dừng sớm.
-        - Kết hợp Top-K Decoding để đảm bảo độ ổn định.
+            select 1/T% tokens to denoise at each step
         """
         self.model.cuda()
         self.model.eval()
         verbose = not self.is_in_train
-        
-        # --- CẤU HÌNH MIND ---
-        MIND_MODEL_PATH = "mind_model.pth" # Đường dẫn file vừa train xong
-        MIND_THRESHOLD = 0.85              # Độ tin cậy cần thiết để dừng (0.8 - 0.9)
-        # ---------------------
-                
-        # 1. Load Mạng Nội quan (MIND)
-        introspection_net = IntrospectionHead(input_dim=384).cuda()
-        try:
-            introspection_net.load_state_dict(torch.load(MIND_MODEL_PATH))
-            if verbose: print(f"[MIND] Loaded Introspection Network from {MIND_MODEL_PATH}")
-        except Exception as e:
-            print(f"[ERROR] Không load được MIND model: {e}. Dùng fallback heuristic.")
-            introspection_net = None
-        
-        if introspection_net: introspection_net.eval()
-
-        # Setup Input
+        # x = torch.transpose(torch.stack(inputs['input_ids']), 0, 1).cuda()
+        # src_mask = torch.transpose(torch.stack(inputs['src_mask']), 0, 1).bool().cuda()
         x = inputs['input_ids'].cuda()
         src_mask = inputs['src_mask'].bool().cuda()
         attention_mask = torch.ones_like(x) 
         batch_size = x.size(0)
 
-        # Mask ban đầu
         init_maskable_mask = maskable_mask = ~src_mask
-        steps_taken = 0
-
-        for t in range(self.diff_args.diffusion_steps-1, -1, -1):
-            steps_taken += 1
-            
+        
+        for t in range(self.diff_args.diffusion_steps-1, -1, -1): # t from T-1 to 0
             with torch.no_grad():
-                # A. Diffusion Forward (Lấy cả Hidden States)
                 if t == self.diff_args.diffusion_steps-1:
+                    # first forward, all position except src is [M]
                     xt = x.masked_fill(maskable_mask, self.tokenizer.mask_token_id)
-                
+
+                if verbose:
+                    print(f"t={t+1}(in):", self.tokenizer.decode(xt.tolist()[0]))
+
                 t_tensor = torch.full((batch_size, ), t, device=x.device)
-                
-                # --- [QUAN TRỌNG] Lấy Hidden States ---
-                # Vì self.model có thể là wrapper, ta truy cập vào backbone bên trong
-                # Nếu model bạn là DiffusionModel -> self.model.model là GPT2
-                backbone = self.model.model if hasattr(self.model, "model") else self.model
-                
-                outputs = backbone.transformer(
-                    inputs_embeds=backbone.transformer.wte(xt), 
-                    return_dict=True, output_hidden_states=True
-                )
-                hidden_states = outputs.last_hidden_state # [Batch, Seq, 384]
-                logits = backbone.lm_head(hidden_states)
-                
-                # Shift Logits
+                logits = self.model(xt, t_tensor, attention_mask=attention_mask)
                 logits = torch.cat([logits[:,0:1], logits[:,:-1]], dim=1)
-                
-                # Tính toán dự đoán cơ bản
+
                 scores = torch.log_softmax(logits, dim=-1)
-                if hasattr(self.tokenizer, "vocab_size"):
-                    scores[:,:,self.tokenizer.vocab_size:] = -1000
-                x0_scores, x0_preds = scores.max(-1)
-                x0_full = xt.masked_scatter(maskable_mask, x0_preds[maskable_mask])
+                scores[:,:,self.tokenizer.vocab_size:]=-1000
+                x0_scores, x0 = scores.max(-1)
 
-                # B. MIND Đánh giá ("Trọng tài")
-                can_exit_mask = torch.zeros_like(maskable_mask, dtype=torch.bool)
+                #### keep non-[MASK] positions as still
+                x0 = xt.masked_scatter(maskable_mask, x0[maskable_mask])
+                if verbose:
+                    print(f"t={t+1}(out):", self.tokenizer.decode(x0.tolist()[0]))
                 
-                if introspection_net:
-                    mind_probs = introspection_net(hidden_states.float()).squeeze(-1)
-                    can_exit_mask = (mind_probs > MIND_THRESHOLD)
+                if t > 0:
+                    if self.diff_args.topk_decoding:
+                        xt = topk_decoding(
+                            x0,
+                            x0_scores,
+                            self.diff_args.decoding_strategy,
+                            init_maskable_mask, 
+                            t,
+                            self.diff_args.diffusion_steps,
+                            self.tokenizer.mask_token_id
+                        )
+                    else:
+                        ## randomly unmask some mask positions as in D3PM
+                        unmask_prob = 1 / (t+1)
+                        mask_to_x0 = torch.rand(xt.shape, device=xt.device) < unmask_prob
+                        # don't unmask somewhere already unmasked
+                        mask_to_x0 = torch.bitwise_and(mask_to_x0, maskable_mask)
+                        xt[mask_to_x0] = x0[mask_to_x0]
+                        maskable_mask.masked_fill_(mask_to_x0, False) 
                 else:
-                    # Fallback (nếu không có MIND)
-                    probs = torch.exp(x0_scores)
-                    can_exit_mask = (probs > 0.9)
-
-                # C. Top-K Schedule ("Người dẫn đường")
-                if t > 0 and self.diff_args.topk_decoding:
-                    xt_sched = topk_decoding(
-                        x0_full, x0_scores, self.diff_args.decoding_strategy,
-                        maskable_mask, t, self.diff_args.diffusion_steps,
-                        self.tokenizer.mask_token_id
-                    )
-                    mask_sched = (xt_sched == self.tokenizer.mask_token_id)
-                else:
-                    mask_sched = torch.zeros_like(maskable_mask, dtype=torch.bool)
-
-                # D. Quyết định cuối cùng (Hybrid Logic)
-                # Giữ mask nếu: (TopK bảo giữ) VÀ (MIND bảo chưa tự tin)
-                # => Unmask nếu: (TopK bảo nhả) HOẶC (MIND bảo tự tin)
-                new_mask = mask_sched & (~can_exit_mask) & init_maskable_mask
-                
-                # Cập nhật xt
-                xt = x0_full.clone()
-                xt[new_mask] = self.tokenizer.mask_token_id
-                maskable_mask = new_mask
-
-                # E. Early Exit
-                if maskable_mask.sum() == 0:
-                    if verbose: print(f"--> MIND Solved at Step {steps_taken}/{self.diff_args.diffusion_steps}")
-                    break
-        
+                    xt = x0
         return xt
-
-    # def generate_samples(self, inputs):
-    #     """
-    #         select 1/T% tokens to denoise at each step
-    #     """
-    #     self.model.cuda()
-    #     self.model.eval()
-    #     verbose = not self.is_in_train
-    #     # x = torch.transpose(torch.stack(inputs['input_ids']), 0, 1).cuda()
-    #     # src_mask = torch.transpose(torch.stack(inputs['src_mask']), 0, 1).bool().cuda()
-    #     x = inputs['input_ids'].cuda()
-    #     src_mask = inputs['src_mask'].bool().cuda()
-    #     attention_mask = torch.ones_like(x) 
-    #     batch_size = x.size(0)
-
-    #     init_maskable_mask = maskable_mask = ~src_mask
-        
-    #     for t in range(self.diff_args.diffusion_steps-1, -1, -1): # t from T-1 to 0
-    #         with torch.no_grad():
-    #             if t == self.diff_args.diffusion_steps-1:
-    #                 # first forward, all position except src is [M]
-    #                 xt = x.masked_fill(maskable_mask, self.tokenizer.mask_token_id)
-
-    #             if verbose:
-    #                 print(f"t={t+1}(in):", self.tokenizer.decode(xt.tolist()[0]))
-
-    #             t_tensor = torch.full((batch_size, ), t, device=x.device)
-    #             logits = self.model(xt, t_tensor, attention_mask=attention_mask)
-    #             logits = torch.cat([logits[:,0:1], logits[:,:-1]], dim=1)
-
-    #             scores = torch.log_softmax(logits, dim=-1)
-    #             scores[:,:,self.tokenizer.vocab_size:]=-1000
-    #             x0_scores, x0 = scores.max(-1)
-
-    #             #### keep non-[MASK] positions as still
-    #             x0 = xt.masked_scatter(maskable_mask, x0[maskable_mask])
-    #             if verbose:
-    #                 print(f"t={t+1}(out):", self.tokenizer.decode(x0.tolist()[0]))
-                
-    #             if t > 0:
-    #                 if self.diff_args.topk_decoding:
-    #                     xt = topk_decoding(
-    #                         x0,
-    #                         x0_scores,
-    #                         self.diff_args.decoding_strategy,
-    #                         init_maskable_mask, 
-    #                         t,
-    #                         self.diff_args.diffusion_steps,
-    #                         self.tokenizer.mask_token_id
-    #                     )
-    #                 else:
-    #                     ## randomly unmask some mask positions as in D3PM
-    #                     unmask_prob = 1 / (t+1)
-    #                     mask_to_x0 = torch.rand(xt.shape, device=xt.device) < unmask_prob
-    #                     # don't unmask somewhere already unmasked
-    #                     mask_to_x0 = torch.bitwise_and(mask_to_x0, maskable_mask)
-    #                     xt[mask_to_x0] = x0[mask_to_x0]
-    #                     maskable_mask.masked_fill_(mask_to_x0, False) 
-    #             else:
-    #                 xt = x0
-    #     return xt
 
 def topk_masking(scores, cutoff_len, stochastic=False, temp=1.0):
     """

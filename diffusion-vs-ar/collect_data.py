@@ -14,8 +14,8 @@ from llmtuner.hparams import ModelArguments, FinetuningArguments, DiffusionArgum
 
 def collect():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_path", required=True, help="Path to checkpoint folder")
-    parser.add_argument("--csv_path", required=True, help="Path to sudoku_train.csv")
+    parser.add_argument("--model_path", default="output/sudoku/mdm-5m-sudoku")
+    parser.add_argument("--csv_path", default="data/sudoku_train.csv")
     parser.add_argument("--save_path", default="introspection_data.pt")
     parser.add_argument("--num_samples", type=int, default=10000, help="Số lượng mẫu train")
     args = parser.parse_args()
